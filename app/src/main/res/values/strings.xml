@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">流氓汉语</string>
+    <string name="accessibility_description">
+        流氓汉语需要无障碍服务权限来读取其他 APP 的界面文字。
+        我们不会收集、上传或分享任何界面内容。
+        所有翻译均在本地完成。
+    </string>
+</resources>

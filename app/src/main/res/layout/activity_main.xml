@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:gravity="center"
+    android:background="@color/bg">
+
+    <!-- 图标 -->
+    <TextView
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:text="氓"
+        android:textSize="36sp"
+        android:textColor="#FFFFFF"
+        android:gravity="center"
+        android:background="@drawable/bg_circle"
+        android:layout_marginBottom="16dp" />
+
+    <!-- 标题 -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="流氓汉语"
+        android:textSize="26sp"
+        android:textColor="#EDEDED"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="一键让任何外语 APP 变成中文"
+        android:textSize="14sp"
+        android:textColor="#7A7A85"
+        android:layout_marginBottom="48dp" />
+
+    <!-- 操作按钮 -->
+    <Button
+        android:id="@+id/btnAccessibility"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="无障碍：点击开启"
+        android:textSize="14sp"
+        android:textColor="#C8C8D0"
+        android:background="@drawable/bg_btn"
+        android:layout_marginBottom="12dp"
+        android:gravity="center" />
+
+    <Button
+        android:id="@+id/btnOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="悬浮窗：点击授权"
+        android:textSize="14sp"
+        android:textColor="#C8C8D0"
+        android:background="@drawable/bg_btn"
+        android:layout_marginBottom="32dp"
+        android:gravity="center" />
+
+    <!-- 启动按钮 -->
+    <Button
+        android:id="@+id/btnToggle"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:text="启动汉化"
+        android:textSize="18sp"
+        android:textColor="#FFFFFF"
+        android:textStyle="bold"
+        android:background="@drawable/bg_btn_primary"
+        android:layout_marginBottom="16dp"
+        android:gravity="center" />
+
+    <!-- 状态 -->
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="已就绪"
+        android:textSize="12sp"
+        android:textColor="#4A4A55" />
+
+</LinearLayout>

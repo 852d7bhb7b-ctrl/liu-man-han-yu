@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 悬浮窗权限 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 网络权限（翻译 API） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 前台服务 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="流氓汉语"
+        android:theme="@style/AppTheme">
+
+        <!-- 主界面：仅一个开关 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 无障碍服务：读取/修改其他 APP 界面 -->
+        <service
+            android:name=".HanyuAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- 悬浮窗服务：显示中文覆盖层 -->
+        <service
+            android:name=".HanyuFloatingService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+
+    </application>
+</manifest>
