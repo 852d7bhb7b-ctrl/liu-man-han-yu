@@ -4,18 +4,12 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 中文字符"氓" -->
+    <!-- 圆形背景 -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M34,30 L34,78 L74,78 L74,30 Z M40,36 L68,36 L68,72 L40,72 Z"/>
-    <text
-        android:fillColor="#FFFFFF"
-        android:fontFamily="sans-serif"
-        android:fontWeight="bold"
-        android:text="氓"
-        android:textSize="48sp"
-        android:x="54"
-        android:y="68"
-        android:textAlignment="center"
-        android:gravity="center"/>
+        android:pathData="M54,54m-28,0a28,28 0,1,1 56,0a28,28 0,1,1 -56,0" />
+    <!-- "氓" 字简化图形：横 + 竖 + 折 -->
+    <path
+        android:fillColor="#FF5C28"
+        android:pathData="M40,36h28v6h-8v24h-4v-24h-8v-6z M38,44h32v4h-10v18h-4v-18h-12Z" />
 </vector>
