@@ -25,19 +25,27 @@ object ApiTranslator {
     /** 翻译中文到指定语言，各级降级 */
     fun translate(text: String, targetLang: String, callback: Callback) {
         thread {
-            tryBaidu(text, targetLang) { r ->
-                if (r != null) callback.onResult(r)
-                else tryMyMemory(text, targetLang) { r2 ->
-                    if (r2 != null) callback.onResult(r2)
-                    else tryGoogle(text, targetLang) { r3 ->
-                        if (r3 != null) callback.onResult(r3)
-                        else tryGemini(text, targetLang) { r4 ->
-                            if (r4 != null) callback.onResult(r4)
-                            else callback.onResult(null)
+            val cb1: Callback = object : Callback {
+                override fun onResult(r: String?) {
+                    if (r != null) callback.onResult(r)
+                    else tryMyMemory(text, targetLang, object : Callback {
+                        override fun onResult(r2: String?) {
+                            if (r2 != null) callback.onResult(r2)
+                            else tryGoogle(text, targetLang, object : Callback {
+                                override fun onResult(r3: String?) {
+                                    if (r3 != null) callback.onResult(r3)
+                                    else tryGemini(text, targetLang, object : Callback {
+                                        override fun onResult(r4: String?) {
+                                            callback.onResult(r4)
+                                        }
+                                    })
+                                }
+                            })
                         }
-                    }
+                    })
                 }
             }
+            tryBaidu(text, targetLang, cb1)
         }
     }
 

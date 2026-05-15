@@ -15,16 +15,20 @@ object TranslationData {
     )
 
     /** 正向：各语言 → 中文 */
-    val toZh: Map<String, Map<String, String>> = mapOf(
-        "en" to enToZh, "ja" to jaToZh, "ko" to koToZh, "de" to deToZh,
-        "fr" to frToZh, "es" to esToZh,
-    )
+    val toZh: Map<String, Map<String, String>> by lazy {
+        mapOf(
+            "en" to enToZh, "ja" to jaToZh, "ko" to koToZh, "de" to deToZh,
+            "fr" to frToZh, "es" to esToZh,
+        )
+    }
 
     /** 反向：中文 → 各语言 */
-    val zhTo: Map<String, Map<String, String>> = mapOf(
-        "en" to zhToEn, "ja" to zhToJa, "ko" to zhToKo, "de" to zhToDe,
-        "fr" to zhToFr, "es" to zhToEs,
-    )
+    val zhTo: Map<String, Map<String, String>> by lazy {
+        mapOf(
+            "en" to zhToEn, "ja" to zhToJa, "ko" to zhToKo, "de" to zhToDe,
+            "fr" to zhToFr, "es" to zhToEs,
+        )
+    }
 
     // ============================================================
     // 正向翻译词典
