@@ -103,11 +103,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isAccessibilityEnabled(): Boolean {
-        val serviceName = "$packageName/.HanyuAccessibilityService"
+        val serviceName = "$packageName/$packageName.HanyuAccessibilityService"
+        // 也兼容 ".ClassName" 格式
+        val serviceNameShort = "$packageName/.HanyuAccessibilityService"
         val enabledServices = Settings.Secure.getString(
             contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
-        return enabledServices.contains(serviceName)
+        return enabledServices.contains(serviceName) || enabledServices.contains(serviceNameShort)
     }
 }
