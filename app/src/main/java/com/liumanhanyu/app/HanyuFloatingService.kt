@@ -13,17 +13,21 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.IBinder
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.widget.TextView
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.app.NotificationCompat
 import java.lang.ref.WeakReference
+import java.util.LinkedHashMap
 
 class HanyuFloatingService : Service() {
 
     companion object {
-        var isActive = false private set
-        var currentSourceLang = "en" private set
+        var isActive = false
+            private set
+        var currentSourceLang = "en"
+            private set
         private var instanceRef: WeakReference<HanyuFloatingService>? = null
         fun updateTranslations(nodes: List<Pair<Rect, String>>) {
             instanceRef?.get()?.applyOverlays(nodes)
