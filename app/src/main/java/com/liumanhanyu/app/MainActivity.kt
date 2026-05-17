@@ -21,6 +21,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnAccessibility: Button
     private lateinit var btnOverlay: Button
     private lateinit var btnToggle: Button
+    private lateinit var btnUpdate: Button
     private lateinit var statusText: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,6 +31,7 @@ class MainActivity : AppCompatActivity() {
         btnAccessibility = findViewById(R.id.btnAccessibility)
         btnOverlay = findViewById(R.id.btnOverlay)
         btnToggle = findViewById(R.id.btnToggle)
+        btnUpdate = findViewById(R.id.btnUpdate)
         statusText = findViewById(R.id.statusText)
 
         btnAccessibility.setOnClickListener {
@@ -75,6 +77,11 @@ class MainActivity : AppCompatActivity() {
                 // 启动完就最小化，让用户切到目标 APP
                 finish()
             }
+        }
+
+        btnUpdate.setOnClickListener {
+            Toast.makeText(this, "正在检查更新...", Toast.LENGTH_SHORT).show()
+            UpdateManager.checkUpdate(this)
         }
     }
 
