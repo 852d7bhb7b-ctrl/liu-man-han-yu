@@ -36,9 +36,11 @@ object UpdateManager {
                 val downloadUrl = asset.getString("browser_download_url")
 
                 // 在主线程开始下载
-                (context as? android.app.Activity)?.runOnUiThread {
-                    startDownload(context, downloadUrl)
-                } ?: if (!silent) showToast(context, "开始下载...")
+                if (context is android.app.Activity) {
+                    context.runOnUiThread { startDownload(context, downloadUrl) }
+                } else if (!silent) {
+                    showToast(context, "开始下载...")
+                }
             } catch (e: Exception) {
                 if (!silent) showToast(context, "检查更新失败: ${e.message}")
             }

@@ -4,6 +4,8 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -20,6 +22,12 @@ class HanyuAccessibilityService : AccessibilityService() {
         var currentPackage: String = ""
             private set
     }
+
+    private val handler = Handler(Looper.getMainLooper())
+    // 防抖：等用户停止输入 600ms 后再调 API
+    private var inputDebounce: Runnable? = null
+    // 记录我们自己设置的文本，避免死循环
+    private var selfSetText: String? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -92,26 +100,98 @@ class HanyuAccessibilityService : AccessibilityService() {
             source.recycle(); return
         }
         val text = source.text?.toString() ?: ""
-        if (TranslationEngine.containsChinese(text)) {
-            val lang = HanyuFloatingService.currentSourceLang
-            TranslationEngine.translateToForeign(text, lang)?.let { foreign ->
-                source.performAction(
-                    AccessibilityNodeInfo.ACTION_SET_TEXT,
-                    Bundle().apply {
-                        putCharSequence(
-                            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                            foreign
-                        )
-                    }
+        source.recycle()
+
+        // 如果这个变更是我们自己触发的，忽略
+        if (text == selfSetText) {
+            selfSetText = null
+            return
+        }
+
+        if (!TranslationEngine.containsChinese(text)) return
+
+        val lang = HanyuFloatingService.currentSourceLang
+
+        // 1) 本地词库优先（即时替换）
+        val localResult = TranslationEngine.translateToForeign(text, lang)
+        if (localResult != null) {
+            replaceInputText(text, localResult)
+            return
+        }
+
+        // 2) 本地没命中 → 防抖后调 API
+        inputDebounce?.let { handler.removeCallbacks(it) }
+        inputDebounce = Runnable {
+            doApiInputTranslation(text, lang)
+        }
+        handler.postDelayed(inputDebounce!!, 600)
+    }
+
+    private fun doApiInputTranslation(originalText: String, targetLang: String) {
+        val svc = instance ?: return
+        val root = svc.rootInActiveWindow ?: return
+        val focusedNode = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        root.recycle()
+
+        if (focusedNode == null) return
+        val currentText = focusedNode.text?.toString() ?: ""
+        // 确认文本没变
+        if (currentText != originalText) {
+            focusedNode.recycle()
+            return
+        }
+
+        ApiTranslator.translate(originalText, "zh", targetLang, object : ApiTranslator.Callback {
+            override fun onResult(translated: String?) {
+                if (translated != null && translated != originalText) {
+                    replaceInputText(originalText, translated)
+                }
+            }
+        })
+        focusedNode.recycle()
+    }
+
+    /**
+     * 替换输入框文本。先标记 selfSetText 防止回环触发。
+     */
+    private fun replaceInputText(originalText: String, newText: String) {
+        val svc = instance ?: return
+        val root = svc.rootInActiveWindow ?: return
+        val focusedNode = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        root.recycle()
+
+        if (focusedNode == null) return
+        val currentText = focusedNode.text?.toString() ?: ""
+        if (currentText != originalText) {
+            focusedNode.recycle()
+            return
+        }
+
+        selfSetText = newText
+        focusedNode.performAction(
+            AccessibilityNodeInfo.ACTION_SET_TEXT,
+            Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    newText
                 )
             }
-        }
-        source.recycle()
+        )
+        // 光标移到末尾
+        focusedNode.performAction(
+            AccessibilityNodeInfo.ACTION_SET_SELECTION,
+            Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newText.length)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newText.length)
+            }
+        )
+        focusedNode.recycle()
     }
 
     override fun onInterrupt() { isEnabled = false }
     override fun onDestroy() {
         super.onDestroy()
+        inputDebounce?.let { handler.removeCallbacks(it) }
         instance = null; isEnabled = false
     }
 }

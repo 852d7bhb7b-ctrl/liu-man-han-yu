@@ -11,8 +11,11 @@ import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.TextView
@@ -35,9 +38,11 @@ class HanyuFloatingService : Service() {
     }
 
     private lateinit var windowManager: WindowManager
-    private val activeOverlays = LinkedHashMap<String, View>()  // key="x,y,w,h"
+    private val activeOverlays = LinkedHashMap<String, View>()
     private lateinit var toggleButton: View
     private val CHANNEL_ID = "hanyu_overlay"
+    private val handler = Handler(Looper.getMainLooper())
+    private var scanRunnable: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -58,21 +63,83 @@ class HanyuFloatingService : Service() {
 
     private fun createToggleButton() {
         val btn = TextView(this).apply {
-            text = "外"; textSize = 20f; setTextColor(0xB3FFFFFF.toInt()); gravity = Gravity.CENTER
+            text = "外"; textSize = 20f; setTextColor(0xB3FFFFFF.toInt())
+            gravity = Gravity.CENTER
             setBackgroundDrawable(android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(0x406DB3FF.toInt())
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(0x406DB3FF.toInt())
             })
-            setOnClickListener { if (isActive) deactivateOverlay() else activateOverlay() }
         }
         val params = WindowManager.LayoutParams().apply {
             type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
-            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             format = PixelFormat.TRANSLUCENT; width = dp(44); height = dp(44)
-            gravity = Gravity.BOTTOM or Gravity.END; x = dp(16); y = dp(80)
+            gravity = Gravity.TOP or Gravity.END; x = dp(16); y = dp(100)
         }
+        btn.setOnTouchListener(ToggleTouchListener(params))
+        btn.setOnClickListener { if (isActive) deactivateOverlay() else activateOverlay() }
         windowManager.addView(btn, params); toggleButton = btn
+    }
+
+    // 拖动悬浮球
+    private inner class ToggleTouchListener(private val params: WindowManager.LayoutParams) : View.OnTouchListener {
+        private var initialX = 0; private var initialY = 0
+        private var initialTouchX = 0f; private var initialTouchY = 0f
+        private var dragging = false
+        private val clickThreshold = 10
+
+        override fun onTouch(v: View, event: MotionEvent): Boolean {
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = params.x; initialY = params.y
+                    initialTouchX = event.rawX; initialTouchY = event.rawY
+                    dragging = false
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - initialTouchX).toInt()
+                    val dy = (event.rawY - initialTouchY).toInt()
+                    if (Math.abs(dx) > clickThreshold || Math.abs(dy) > clickThreshold) {
+                        dragging = true
+                    }
+                    if (dragging) {
+                        params.x = initialX - dx
+                        params.y = initialY + dy
+                        try { windowManager.updateViewLayout(v, params) } catch (_: Exception) {}
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!dragging) {
+                        v.performClick()
+                    }
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    private fun startPeriodicScan() {
+        stopPeriodicScan()
+        scanRunnable = object : Runnable {
+            override fun run() {
+                if (isActive) {
+                    HanyuAccessibilityService.instance?.scanAndTranslate()
+                    handler.postDelayed(this, 800)
+                }
+            }
+        }
+        handler.postDelayed(scanRunnable!!, 800)
+    }
+
+    private fun stopPeriodicScan() {
+        scanRunnable?.let { handler.removeCallbacks(it) }
+        scanRunnable = null
     }
 
     private fun activateOverlay() {
@@ -83,10 +150,12 @@ class HanyuFloatingService : Service() {
         } ?: "en"
         isActive = true; updateToggle(true)
         HanyuAccessibilityService.instance?.scanAndTranslate()
+        startPeriodicScan()
     }
 
     private fun deactivateOverlay() {
         isActive = false; updateToggle(false); clearAllOverlays()
+        stopPeriodicScan()
     }
 
     private fun updateToggle(active: Boolean) {
@@ -99,23 +168,24 @@ class HanyuFloatingService : Service() {
         btn.setTextColor(if (active) 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
     }
 
-    // ===== 增量覆盖层更新 + API 兜底 =====
-    private val inflightApi = HashSet<String>()  // 防止重复 API 调用
+    // ===== 覆盖层更新 + API 兜底 =====
+    private val inflightApi = HashSet<String>()
 
     private fun applyOverlays(nodes: List<Pair<Rect, String>>) {
         if (!isActive) return
         val newKeys = HashSet<String>()
-        val apiQueue = mutableListOf<Triple<Rect, String, String>>()  // rect, text, key
+        val apiQueue = mutableListOf<Triple<Rect, String, String>>()
 
         for ((rect, originalText) in nodes) {
-            if (originalText.length > 80) continue  // 超长文本跳过
+            if (originalText.length > 80) continue
 
             val translated = TranslationEngine.translateToChinese(originalText, currentSourceLang)
             val key = "${rect.left},${rect.top},${rect.width()},${rect.height()}"
 
             if (translated != null) {
-                // 本地词库命中 → 直接显示
                 if (activeOverlays.containsKey(key)) {
+                    // 更新位置（滚动后位置可能变了）
+                    updateOverlayPosition(key, rect)
                     val v = activeOverlays[key] as? TextView
                     if (v != null && v.text != translated) v.text = translated
                 } else {
@@ -123,28 +193,26 @@ class HanyuFloatingService : Service() {
                 }
                 newKeys.add(key)
             } else if (originalText.any { it.isLetter() } && originalText !in inflightApi) {
-                // 本地没命中 → 加入 API 队列
                 inflightApi.add(originalText)
                 apiQueue.add(Triple(rect, originalText, key))
             }
         }
 
-        // 清除不再需要的覆盖层
+        // 清除无效覆盖层
         val toRemove = activeOverlays.keys.filter { it !in newKeys }
         for (k in toRemove) {
             try { windowManager.removeView(activeOverlays[k]) } catch (_: Exception) {}
             activeOverlays.remove(k)
         }
 
-        // 异步 API 翻译（每批最多 5 条，避免拥堵）
+        // 异步 API 翻译
         for ((rect, text, key) in apiQueue.take(5)) {
-            ApiTranslator.translate(text, currentSourceLang, object : ApiTranslator.Callback {
+            ApiTranslator.translate(text, currentSourceLang, "zh", object : ApiTranslator.Callback {
                 override fun onResult(translated: String?) {
                     inflightApi.remove(text)
                     if (translated != null && isActive) {
-                        // 在主线程更新覆盖层
                         (toggleButton as? TextView)?.post {
-                            if (isActive && activeOverlays.containsKey(key).not()) {
+                            if (isActive && !activeOverlays.containsKey(key)) {
                                 addOverlayView(rect, translated, key)
                             }
                         }
@@ -154,7 +222,6 @@ class HanyuFloatingService : Service() {
         }
     }
 
-    /** 创建单个覆盖层 */
     private fun addOverlayView(rect: Rect, text: String, key: String) {
         val overlay = TextView(this).apply {
             this.text = text; setTextColor(0xE6000000.toInt()); textSize = 12f
@@ -177,11 +244,30 @@ class HanyuFloatingService : Service() {
         activeOverlays[key] = overlay
     }
 
+    /** 更新已有覆盖层的位置 */
+    private fun updateOverlayPosition(key: String, newRect: Rect) {
+        val view = activeOverlays[key] ?: return
+        val params = WindowManager.LayoutParams().apply {
+            type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            format = PixelFormat.TRANSLUCENT
+            width = WindowManager.LayoutParams.WRAP_CONTENT
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            gravity = Gravity.TOP or Gravity.START; x = newRect.left; y = newRect.top
+        }
+        try { windowManager.updateViewLayout(view, params) } catch (_: Exception) {}
+    }
+
     private fun clearAllOverlays() {
         for ((_, view) in activeOverlays) {
             try { windowManager.removeView(view) } catch (_: Exception) {}
         }
         activeOverlays.clear()
+        inflightApi.clear()
     }
 
     private fun collectText(node: AccessibilityNodeInfo, sb: StringBuilder) {
@@ -215,6 +301,7 @@ class HanyuFloatingService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDestroy() {
+        stopPeriodicScan()
         clearAllOverlays()
         try { windowManager.removeView(toggleButton) } catch (_: Exception) {}
         isActive = false; instanceRef = null
