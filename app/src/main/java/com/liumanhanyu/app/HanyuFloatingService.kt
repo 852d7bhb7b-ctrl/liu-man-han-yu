@@ -99,54 +99,82 @@ class HanyuFloatingService : Service() {
         btn.setTextColor(if (active) 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
     }
 
-    // ===== 增量覆盖层更新（不再全清重画） =====
+    // ===== 增量覆盖层更新 + API 兜底 =====
+    private val inflightApi = HashSet<String>()  // 防止重复 API 调用
+
     private fun applyOverlays(nodes: List<Pair<Rect, String>>) {
         if (!isActive) return
         val newKeys = HashSet<String>()
+        val apiQueue = mutableListOf<Triple<Rect, String, String>>()  // rect, text, key
 
         for ((rect, originalText) in nodes) {
+            if (originalText.length > 80) continue  // 超长文本跳过
+
             val translated = TranslationEngine.translateToChinese(originalText, currentSourceLang)
-                ?: continue
             val key = "${rect.left},${rect.top},${rect.width()},${rect.height()}"
 
-            // 检查是否已有同位置覆盖层
-            if (activeOverlays.containsKey(key)) {
-                // 更新文本
-                val v = activeOverlays[key] as? TextView
-                if (v != null && v.text != translated) v.text = translated
+            if (translated != null) {
+                // 本地词库命中 → 直接显示
+                if (activeOverlays.containsKey(key)) {
+                    val v = activeOverlays[key] as? TextView
+                    if (v != null && v.text != translated) v.text = translated
+                } else {
+                    addOverlayView(rect, translated, key)
+                }
                 newKeys.add(key)
-                continue
+            } else if (originalText.any { it.isLetter() } && originalText !in inflightApi) {
+                // 本地没命中 → 加入 API 队列
+                inflightApi.add(originalText)
+                apiQueue.add(Triple(rect, originalText, key))
             }
-
-            // 新建覆盖层
-            val overlay = TextView(this).apply {
-                text = translated; setTextColor(0xE6000000.toInt()); textSize = 12f
-                setBackgroundColor(0x08FF5C28.toInt())
-                setPadding(dp(2), dp(1), dp(2), dp(1)); maxLines = 3
-            }
-            val params = WindowManager.LayoutParams().apply {
-                type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
-                flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                format = PixelFormat.TRANSLUCENT
-                width = WindowManager.LayoutParams.WRAP_CONTENT
-                height = WindowManager.LayoutParams.WRAP_CONTENT
-                gravity = Gravity.TOP or Gravity.START; x = rect.left; y = rect.top
-            }
-            windowManager.addView(overlay, params)
-            activeOverlays[key] = overlay
-            newKeys.add(key)
         }
 
         // 清除不再需要的覆盖层
         val toRemove = activeOverlays.keys.filter { it !in newKeys }
-        for (key in toRemove) {
-            try { windowManager.removeView(activeOverlays[key]) } catch (_: Exception) {}
-            activeOverlays.remove(key)
+        for (k in toRemove) {
+            try { windowManager.removeView(activeOverlays[k]) } catch (_: Exception) {}
+            activeOverlays.remove(k)
         }
+
+        // 异步 API 翻译（每批最多 5 条，避免拥堵）
+        for ((rect, text, key) in apiQueue.take(5)) {
+            ApiTranslator.translate(text, currentSourceLang, object : ApiTranslator.Callback {
+                override fun onResult(translated: String?) {
+                    inflightApi.remove(text)
+                    if (translated != null && isActive) {
+                        // 在主线程更新覆盖层
+                        (toggleButton as? TextView)?.post {
+                            if (isActive && activeOverlays.containsKey(key).not()) {
+                                addOverlayView(rect, translated, key)
+                            }
+                        }
+                    }
+                }
+            })
+        }
+    }
+
+    /** 创建单个覆盖层 */
+    private fun addOverlayView(rect: Rect, text: String, key: String) {
+        val overlay = TextView(this).apply {
+            this.text = text; setTextColor(0xE6000000.toInt()); textSize = 12f
+            setBackgroundColor(0x08FF5C28.toInt())
+            setPadding(dp(2), dp(1), dp(2), dp(1)); maxLines = 3
+        }
+        val params = WindowManager.LayoutParams().apply {
+            type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            format = PixelFormat.TRANSLUCENT
+            width = WindowManager.LayoutParams.WRAP_CONTENT
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            gravity = Gravity.TOP or Gravity.START; x = rect.left; y = rect.top
+        }
+        windowManager.addView(overlay, params)
+        activeOverlays[key] = overlay
     }
 
     private fun clearAllOverlays() {
