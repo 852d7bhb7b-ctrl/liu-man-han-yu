@@ -7,6 +7,16 @@ package com.liumanhanyu.app
  */
 object TranslationEngine {
 
+    /** 翻译缓存（避免重复查词库） */
+    private const val CACHE_MAX = 500
+    private val cache = object : LinkedHashMap<String, String?>(CACHE_MAX, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String?>?): Boolean {
+            return size > CACHE_MAX
+        }
+    }
+
+    fun clearCache() { cache.clear() }
+
     /** 从文本特征检测语言 */
     fun detectLanguage(text: String): String {
         if (text.any { it in 'ぁ'..'ん' || it in 'ァ'..'ン' }) return "ja"
@@ -24,16 +34,27 @@ object TranslationEngine {
         if (trimmed.isEmpty()) return null
         if (!trimmed.any { it.isLetter() }) return null
 
+        val cacheKey = "zh|$sourceLang|$trimmed"
+        cache[cacheKey]?.let { return it }
+
         val dict = TranslationData.toZh[sourceLang] ?: TranslationData.toZh["en"]!!
-        return findInDict(trimmed, dict)
+        val result = findInDict(trimmed, dict)
+        cache[cacheKey] = result
+        return result
     }
 
     /** 反向：中文 → 目标语言 */
     fun translateToForeign(chinese: String, targetLang: String): String? {
         val trimmed = chinese.trim()
         if (trimmed.isEmpty()) return null
+
+        val cacheKey = "$targetLang|zh|$trimmed"
+        cache[cacheKey]?.let { return it }
+
         val dict = TranslationData.zhTo[targetLang] ?: TranslationData.zhTo["en"]!!
-        return dict[trimmed]
+        val result = dict[trimmed]
+        cache[cacheKey] = result
+        return result
     }
 
     /** 从界面文本中检测主语言 */
