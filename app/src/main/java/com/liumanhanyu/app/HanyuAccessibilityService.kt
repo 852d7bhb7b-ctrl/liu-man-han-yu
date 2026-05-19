@@ -9,9 +9,6 @@ import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
-/**
- * 无障碍服务 — 读取界面文字 + 输入拦截
- */
 class HanyuAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -24,9 +21,7 @@ class HanyuAccessibilityService : AccessibilityService() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    // 防抖：等用户停止输入 600ms 后再调 API
     private var inputDebounce: Runnable? = null
-    // 记录我们自己设置的文本，避免死循环
     private var selfSetText: String? = null
 
     override fun onServiceConnected() {
@@ -37,7 +32,8 @@ class HanyuAccessibilityService : AccessibilityService() {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                     AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                     AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
-                    AccessibilityEvent.TYPE_VIEW_FOCUSED
+                    AccessibilityEvent.TYPE_VIEW_FOCUSED or
+                    AccessibilityEvent.TYPE_VIEW_SCROLLED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                     AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
@@ -53,7 +49,8 @@ class HanyuAccessibilityService : AccessibilityService() {
                 event.packageName?.toString()?.let { currentPackage = it }
                 if (HanyuFloatingService.isActive) scanAndTranslate()
             }
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 if (HanyuFloatingService.isActive) scanAndTranslate()
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> handleInputChange(event)
@@ -63,35 +60,66 @@ class HanyuAccessibilityService : AccessibilityService() {
     fun scanAndTranslate() {
         if (!isEnabled) return
         val root = rootInActiveWindow ?: return
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
         val textNodes = mutableListOf<Pair<Rect, String>>()
-        collectTextNodes(root, textNodes)
-        HanyuFloatingService.updateTranslations(textNodes)
+        collectTextNodes(root, nodes, textNodes)
+        HanyuFloatingService.updateTranslations(nodes, textNodes)
         root.recycle()
     }
 
     private fun collectTextNodes(
         node: AccessibilityNodeInfo,
+        allNodes: MutableList<AccessibilityNodeInfo>,
         result: MutableList<Pair<Rect, String>>
     ) {
         val text = node.text?.toString()?.trim()
         if (!text.isNullOrEmpty() && text.any { it.isLetter() }) {
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            if (!rect.isEmpty) result.add(rect to text)
+            if (!rect.isEmpty) {
+                result.add(rect to text)
+                allNodes.add(AccessibilityNodeInfo.obtain(node))
+            }
         }
         val desc = node.contentDescription?.toString()?.trim()
         if (!desc.isNullOrEmpty() && desc.any { it.isLetter() }) {
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            if (!rect.isEmpty) result.add(rect to desc)
+            if (!rect.isEmpty) {
+                result.add(rect to desc)
+                allNodes.add(AccessibilityNodeInfo.obtain(node))
+            }
         }
         for (i in 0 until node.childCount) {
             node.getChild(i)?.let { child ->
-                collectTextNodes(child, result)
+                collectTextNodes(child, allNodes, result)
                 child.recycle()
             }
         }
     }
+
+    /** 尝试直接替换节点文字（真正隐形，无覆盖层） */
+    fun tryDirectReplace(node: AccessibilityNodeInfo, translated: String): Boolean {
+        return try {
+            val currentText = node.text?.toString() ?: ""
+            if (currentText == translated) return true
+            selfSetText = translated
+            node.performAction(
+                AccessibilityNodeInfo.ACTION_SET_TEXT,
+                Bundle().apply {
+                    putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        translated
+                    )
+                }
+            )
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // ===== 输入反向翻译 =====
 
     private fun handleInputChange(event: AccessibilityEvent) {
         if (!HanyuFloatingService.isActive) return
@@ -102,7 +130,6 @@ class HanyuAccessibilityService : AccessibilityService() {
         val text = source.text?.toString() ?: ""
         source.recycle()
 
-        // 如果这个变更是我们自己触发的，忽略
         if (text == selfSetText) {
             selfSetText = null
             return
@@ -112,14 +139,12 @@ class HanyuAccessibilityService : AccessibilityService() {
 
         val lang = HanyuFloatingService.currentSourceLang
 
-        // 1) 本地词库优先（即时替换）
         val localResult = TranslationEngine.translateToForeign(text, lang)
         if (localResult != null) {
             replaceInputText(text, localResult)
             return
         }
 
-        // 2) 本地没命中 → 防抖后调 API
         inputDebounce?.let { handler.removeCallbacks(it) }
         inputDebounce = Runnable {
             doApiInputTranslation(text, lang)
@@ -135,7 +160,6 @@ class HanyuAccessibilityService : AccessibilityService() {
 
         if (focusedNode == null) return
         val currentText = focusedNode.text?.toString() ?: ""
-        // 确认文本没变
         if (currentText != originalText) {
             focusedNode.recycle()
             return
@@ -151,9 +175,6 @@ class HanyuAccessibilityService : AccessibilityService() {
         focusedNode.recycle()
     }
 
-    /**
-     * 替换输入框文本。先标记 selfSetText 防止回环触发。
-     */
     private fun replaceInputText(originalText: String, newText: String) {
         val svc = instance ?: return
         val root = svc.rootInActiveWindow ?: return
@@ -177,7 +198,6 @@ class HanyuAccessibilityService : AccessibilityService() {
                 )
             }
         )
-        // 光标移到末尾
         focusedNode.performAction(
             AccessibilityNodeInfo.ACTION_SET_SELECTION,
             Bundle().apply {

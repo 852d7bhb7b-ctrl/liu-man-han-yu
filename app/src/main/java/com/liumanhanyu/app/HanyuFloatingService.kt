@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
@@ -32,8 +33,8 @@ class HanyuFloatingService : Service() {
         var currentSourceLang = "en"
             private set
         private var instanceRef: WeakReference<HanyuFloatingService>? = null
-        fun updateTranslations(nodes: List<Pair<Rect, String>>) {
-            instanceRef?.get()?.applyOverlays(nodes)
+        fun updateTranslations(nodes: List<AccessibilityNodeInfo>, texts: List<Pair<Rect, String>>) {
+            instanceRef?.get()?.applyOverlays(nodes, texts)
         }
     }
 
@@ -63,8 +64,7 @@ class HanyuFloatingService : Service() {
 
     private fun createToggleButton() {
         val btn = TextView(this).apply {
-            text = "外"; textSize = 20f; setTextColor(0xB3FFFFFF.toInt())
-            gravity = Gravity.CENTER
+            text = "外"; textSize = 20f; setTextColor(0xB3FFFFFF.toInt()); gravity = Gravity.CENTER
             setBackgroundDrawable(android.graphics.drawable.GradientDrawable().apply {
                 shape = android.graphics.drawable.GradientDrawable.OVAL
                 setColor(0x406DB3FF.toInt())
@@ -85,7 +85,6 @@ class HanyuFloatingService : Service() {
         windowManager.addView(btn, params); toggleButton = btn
     }
 
-    // 拖动悬浮球
     private inner class ToggleTouchListener(private val params: WindowManager.LayoutParams) : View.OnTouchListener {
         private var initialX = 0; private var initialY = 0
         private var initialTouchX = 0f; private var initialTouchY = 0f
@@ -103,20 +102,15 @@ class HanyuFloatingService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - initialTouchX).toInt()
                     val dy = (event.rawY - initialTouchY).toInt()
-                    if (Math.abs(dx) > clickThreshold || Math.abs(dy) > clickThreshold) {
-                        dragging = true
-                    }
+                    if (Math.abs(dx) > clickThreshold || Math.abs(dy) > clickThreshold) dragging = true
                     if (dragging) {
-                        params.x = initialX - dx
-                        params.y = initialY + dy
+                        params.x = initialX - dx; params.y = initialY + dy
                         try { windowManager.updateViewLayout(v, params) } catch (_: Exception) {}
                     }
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!dragging) {
-                        v.performClick()
-                    }
+                    if (!dragging) v.performClick()
                     return true
                 }
             }
@@ -168,37 +162,59 @@ class HanyuFloatingService : Service() {
         btn.setTextColor(if (active) 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
     }
 
-    // ===== 覆盖层更新 + API 兜底 =====
+    // ===== 覆盖层更新 =====
     private val inflightApi = HashSet<String>()
 
-    private fun applyOverlays(nodes: List<Pair<Rect, String>>) {
+    private fun applyOverlays(
+        nodes: List<AccessibilityNodeInfo>,
+        texts: List<Pair<Rect, String>>
+    ) {
         if (!isActive) return
+
         val newKeys = HashSet<String>()
         val apiQueue = mutableListOf<Triple<Rect, String, String>>()
+        // 待回收的节点副本
+        val nodeList = nodes.toList()
 
-        for ((rect, originalText) in nodes) {
+        for (i in texts.indices) {
+            val (rect, originalText) = texts[i]
             if (originalText.length > 80) continue
 
             val translated = TranslationEngine.translateToChinese(originalText, currentSourceLang)
             val key = "${rect.left},${rect.top},${rect.width()},${rect.height()}"
 
             if (translated != null) {
-                if (activeOverlays.containsKey(key)) {
-                    // 更新位置（滚动后位置可能变了）
-                    updateOverlayPosition(key, rect)
-                    val v = activeOverlays[key] as? TextView
-                    if (v != null && v.text != translated) v.text = translated
+                // ① 优先尝试直接替换节点文字（真正隐形）
+                val node = nodeList.getOrNull(i)
+                val directOk = node != null && HanyuAccessibilityService.instance?.tryDirectReplace(node, translated) == true
+                if (directOk) {
+                    // 直接替换成功，移除旧的覆盖层（如果有）
+                    if (activeOverlays.containsKey(key)) {
+                        try { windowManager.removeView(activeOverlays[key]) } catch (_: Exception) {}
+                        activeOverlays.remove(key)
+                    }
+                    newKeys.add(key)
                 } else {
-                    addOverlayView(rect, translated, key)
+                    // ② 替换失败 → 隐形覆盖层
+                    if (activeOverlays.containsKey(key)) {
+                        updateOverlayPosition(key, rect)
+                        val v = activeOverlays[key] as? TextView
+                        if (v != null && v.text != translated) v.text = translated
+                    } else {
+                        addOverlayView(rect, translated, key)
+                    }
+                    newKeys.add(key)
                 }
-                newKeys.add(key)
             } else if (originalText.any { it.isLetter() } && originalText !in inflightApi) {
                 inflightApi.add(originalText)
                 apiQueue.add(Triple(rect, originalText, key))
             }
         }
 
-        // 清除无效覆盖层
+        // 清理节点副本
+        nodeList.forEach { it.recycle() }
+
+        // 清除无效覆盖层（仅覆盖层，不清理已直替换的）
         val toRemove = activeOverlays.keys.filter { it !in newKeys }
         for (k in toRemove) {
             try { windowManager.removeView(activeOverlays[k]) } catch (_: Exception) {}
@@ -222,11 +238,18 @@ class HanyuFloatingService : Service() {
         }
     }
 
+    /** 隐形覆盖层：无背景色，白字加黑色描边，适配任何背景 */
     private fun addOverlayView(rect: Rect, text: String, key: String) {
         val overlay = TextView(this).apply {
-            this.text = text; setTextColor(0xE6000000.toInt()); textSize = 12f
-            setBackgroundColor(0x08FF5C28.toInt())
-            setPadding(dp(2), dp(1), dp(2), dp(1)); maxLines = 3
+            this.text = text
+            setTextColor(Color.BLACK)
+            textSize = 13f
+            // 白色阴影掩盖原外语文字，黑字清晰可读
+            setShadowLayer(6f, 0f, 0f, Color.WHITE)
+            setPadding(dp(4), dp(2), dp(4), dp(2))
+            maxLines = 3
+            // 用重绘层确保阴影完整
+            setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         }
         val params = WindowManager.LayoutParams().apply {
             type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -238,13 +261,14 @@ class HanyuFloatingService : Service() {
             format = PixelFormat.TRANSLUCENT
             width = WindowManager.LayoutParams.WRAP_CONTENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
-            gravity = Gravity.TOP or Gravity.START; x = rect.left; y = rect.top
+            gravity = Gravity.TOP or Gravity.START
+            x = rect.left - dp(2)
+            y = rect.top - dp(2)
         }
         windowManager.addView(overlay, params)
         activeOverlays[key] = overlay
     }
 
-    /** 更新已有覆盖层的位置 */
     private fun updateOverlayPosition(key: String, newRect: Rect) {
         val view = activeOverlays[key] ?: return
         val params = WindowManager.LayoutParams().apply {
@@ -257,7 +281,9 @@ class HanyuFloatingService : Service() {
             format = PixelFormat.TRANSLUCENT
             width = WindowManager.LayoutParams.WRAP_CONTENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
-            gravity = Gravity.TOP or Gravity.START; x = newRect.left; y = newRect.top
+            gravity = Gravity.TOP or Gravity.START
+            x = newRect.left - dp(2)
+            y = newRect.top - dp(2)
         }
         try { windowManager.updateViewLayout(view, params) } catch (_: Exception) {}
     }
