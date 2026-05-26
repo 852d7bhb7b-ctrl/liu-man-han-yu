@@ -5,7 +5,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -23,6 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnToggle: Button
     private lateinit var btnUpdate: Button
     private lateinit var statusText: TextView
+    private lateinit var etGeminiKey: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,6 +37,25 @@ class MainActivity : AppCompatActivity() {
         btnToggle = findViewById(R.id.btnToggle)
         btnUpdate = findViewById(R.id.btnUpdate)
         statusText = findViewById(R.id.statusText)
+        etGeminiKey = findViewById(R.id.etGeminiKey)
+
+        // 初始化 ApiTranslator（全局上下文）
+        ApiTranslator.init(applicationContext)
+
+        // 加载已保存的 Gemini Key
+        val savedKey = getSharedPreferences("hanyu_settings", 0).getString("gemini_key", "") ?: ""
+        etGeminiKey.setText(savedKey)
+
+        // 输入后自动保存
+        etGeminiKey.addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) {
+                getSharedPreferences("hanyu_settings", 0).edit()
+                    .putString("gemini_key", s?.toString()?.trim() ?: "")
+                    .apply()
+            }
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        })
 
         btnAccessibility.setOnClickListener {
             Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).also {
@@ -80,7 +103,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnUpdate.setOnClickListener {
-            Toast.makeText(this, "正在检查更新...", Toast.LENGTH_SHORT).show()
             UpdateManager.checkUpdate(this)
         }
     }
@@ -88,6 +110,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateUI()
+        HanyuFloatingService.showToggle()
     }
 
     private fun updateUI() {
