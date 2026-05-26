@@ -18,23 +18,22 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * APP 内更新：Gitee 主源（国内可达）+ GitHub 备用
+ * APP 内更新：从 GitHub raw 拉取 version.json（国内可访问，无需翻墙）
+ * APK 通过 GitHub Releases 直链下载
  */
 object UpdateManager {
 
-    // Gitee 主源（中国大陆可直接访问）
-    private const val GITEE_API = "https://gitee.com/api/v5/repos/852d7bhb7b-ctrl/liu-man-han-yu/releases/latest"
-    // GitHub 备用
-    private const val GH_API = "https://api.github.com/repos/852d7bhb7b-ctrl/liu-man-han-yu/releases/latest"
+    // raw.githubusercontent.com 在国内可访问
+    private const val VERSION_URL = "https://raw.githubusercontent.com/852d7bhb7b-ctrl/liu-man-han-yu/main/version.json"
 
-    private fun getVerName(ctx: Context) = try {
-        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?"
-    } catch (_: Exception) { "?" }
+    // 备用：直接访问 GitHub 源文件
+    private const val VERSION_URL_FALLBACK = "https://raw.fastgit.org/852d7bhb7b-ctrl/liu-man-han-yu/main/version.json"
 
-    data class UpdateInfo(val version: String, val url: String, val body: String)
+    data class UpdateInfo(val version: String, val versionCode: Int, val url: String, val changelog: String)
 
     fun checkUpdate(activity: Activity) {
         val curVer = getVerName(activity)
+        val curCode = getVerCode(activity)
         val dlg = AlertDialog.Builder(activity)
             .setTitle("检查更新")
             .setMessage("当前版本: v$curVer\n正在检查...")
@@ -42,48 +41,62 @@ object UpdateManager {
         dlg.show()
 
         Thread {
-            // 优先 Gitee，国内可达
-            var info = fetch(GITEE_API, false)
-            if (info == null) info = fetch(GH_API, true)
-            val finalInfo = info
+            var info = fetchVersionJson(VERSION_URL)
+            if (info == null) info = fetchVersionJson(VERSION_URL_FALLBACK)
 
             activity.runOnUiThread {
                 dlg.dismiss()
                 when {
-                    finalInfo != null && finalInfo.version != curVer ->
-                        AlertDialog.Builder(activity)
-                            .setTitle("发现新版本 v${finalInfo.version}")
-                            .setMessage(finalInfo.body.take(200) + "\n\n当前: v$curVer → 新: v${finalInfo.version}")
-                            .setPositiveButton("立即下载") { _, _ -> download(activity, finalInfo.url) }
-                            .setNegativeButton("稍后", null).show()
-                    finalInfo != null ->
-                        AlertDialog.Builder(activity)
-                            .setTitle("已是最新版本").setMessage("v$curVer")
-                            .setPositiveButton("确定", null).show()
-                    else ->
+                    info == null ->
                         AlertDialog.Builder(activity)
                             .setTitle("检查更新失败")
-                            .setMessage("无法连接更新服务器\n当前版本: v$curVer\n\n请稍后重试")
+                            .setMessage("无法连接更新服务器\n当前版本: v$curVer\n\n请检查网络后重试")
+                            .setPositiveButton("确定", null).show()
+                    info.versionCode > curCode ->
+                        AlertDialog.Builder(activity)
+                            .setTitle("发现新版本 v${info.version}")
+                            .setMessage("${info.changelog}\n\n当前: v$curVer → 新: v${info.version}")
+                            .setPositiveButton("立即下载") { _, _ -> download(activity, info.url) }
+                            .setNegativeButton("稍后", null).show()
+                    else ->
+                        AlertDialog.Builder(activity)
+                            .setTitle("已是最新版本")
+                            .setMessage("当前版本: v$curVer\n无需更新")
                             .setPositiveButton("确定", null).show()
                 }
             }
         }.start()
     }
 
-    private fun fetch(apiUrl: String, isGithub: Boolean): UpdateInfo? {
+    private fun fetchVersionJson(url: String): UpdateInfo? {
         var c: HttpURLConnection? = null
         return try {
-            c = URL(apiUrl).openConnection() as HttpURLConnection
+            c = URL(url).openConnection() as HttpURLConnection
             c.connectTimeout = 10000; c.readTimeout = 10000
-            if (isGithub) c.setRequestProperty("Accept", "application/vnd.github.v3+json")
-            val j = JSONObject(c.inputStream.bufferedReader().readText())
-            val tag = j.optString("tag_name", "").removePrefix("v")
-            val assets = j.getJSONArray("assets")
-            if (assets.length() == 0) null
-            else UpdateInfo(tag, assets.getJSONObject(0).getString("browser_download_url"), j.optString("body", ""))
-        } catch (_: Exception) { null }
-        finally { c?.disconnect() }
+            c.setRequestProperty("User-Agent", "Mozilla/5.0")
+            // 如果返回重定向，手动跟随
+            c.instanceFollowRedirects = true
+            val body = c.inputStream.bufferedReader().readText()
+            val j = JSONObject(body)
+            UpdateInfo(
+                version = j.optString("version", ""),
+                versionCode = j.optInt("versionCode", 0),
+                url = j.optString("downloadUrl", ""),
+                changelog = j.optString("changelog", "")
+            )
+        } catch (e: Exception) {
+            android.util.Log.w("HanyuUpdate", "fetch $url: ${e.message}")
+            null
+        } finally { c?.disconnect() }
     }
+
+    private fun getVerName(ctx: Context) = try {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?"
+    } catch (_: Exception) { "?" }
+
+    private fun getVerCode(ctx: Context) = try {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionCode
+    } catch (_: Exception) { 0 }
 
     private fun download(ctx: Context, url: String) {
         try {
