@@ -11,8 +11,8 @@ android {
         applicationId = "com.liumanhanyu.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 4
+        versionName = "1.0.4"
     }
 
     buildTypes {
