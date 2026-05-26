@@ -33,30 +33,34 @@ object TranslationEngine {
         return "en"
     }
 
-    /** 正向：源语言文本 → 中文 */
-    fun translateToChinese(text: String, sourceLang: String): String? {
+    /** 正向：源语言文本 → 中文，自动检测语言 */
+    fun translateToChinese(text: String): String? {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return null
-        if (!trimmed.any { it.isLetter() }) return null
+        if (!trimmed.any { it.isLetter() || it in '一'..'鿿' || it in '぀'..'ヿ' || it in '가'..'힯' }) return null
 
-        val cacheKey = "zh|$sourceLang|$trimmed"
+        // 每个文本独立检测语言，避免全局语言假设错误
+        val lang = if (containsChinese(trimmed)) "zh"
+        else detectLanguage(trimmed)
+
+        val cacheKey = "zh|$lang|$trimmed"
         if (cache.containsKey(cacheKey)) return cache[cacheKey]
 
-        val dict = TranslationData.toZh[sourceLang] ?: TranslationData.toZh["en"]!!
+        val dict = TranslationData.toZh[lang] ?: TranslationData.toZh["en"]!!
         val result = findInDict(trimmed, dict)
         cache[cacheKey] = result
         return result
     }
 
     /** 正向 + API 兜底：本地找不到自动走云端 */
-    fun translateToChineseWithFallback(text: String, sourceLang: String, callback: (String?) -> Unit) {
-        val local = translateToChinese(text, sourceLang)
+    fun translateToChineseWithFallback(text: String, callback: (String?) -> Unit) {
+        val local = translateToChinese(text)
         if (local != null) { callback(local); return }
-        ApiTranslator.translate(text, sourceLang, "zh", object : ApiTranslator.Callback {
+        val lang = if (containsChinese(text.trim())) "zh" else detectLanguage(text.trim())
+        ApiTranslator.translate(text, lang, "zh", object : ApiTranslator.Callback {
             override fun onResult(translated: String?) {
                 if (translated != null) {
-                    val cacheKey = "zh|$sourceLang|${text.trim()}"
-                    cache[cacheKey] = translated
+                    cache["zh|$lang|${text.trim()}"] = translated
                 }
                 callback(translated)
             }

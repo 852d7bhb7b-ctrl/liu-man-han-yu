@@ -164,8 +164,12 @@ class HanyuAccessibilityService : AccessibilityService() {
         fun tryAdd(text: CharSequence?) {
             val s = text?.toString()?.trim() ?: return
             if (s.isEmpty() || s.length > 500) return
-            if (!s.any { it.isLetter() }) return
-            // 空 bounds 用默认位置（屏幕左上角偏移），后续 applyOverlays 会处理
+            // 跳过纯中文/纯数字/纯符号
+            val letterCount = s.count { it.isLetter() }
+            if (letterCount == 0) return
+            val nonCjkLetters = s.count { it.isLetter() && it !in '一'..'鿿' && it !in '぀'..'ヿ' && it !in '가'..'힯' }
+            if (nonCjkLetters == 0) return // 全是中日韩文字，无需翻译
+            // 空 bounds 用默认位置
             val useRect = if (rect.isEmpty) Rect(100, 100, 300, 130) else rect
             result.add(useRect to s)
             allNodes.add(AccessibilityNodeInfo.obtain(node))

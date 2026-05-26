@@ -37,7 +37,7 @@ class HanyuFloatingService : Service() {
             svc.handler.post { svc.applyOverlays(nodes, texts) }
         }
         fun showDiag(msg: String) { instanceRef?.get()?.showDiagBanner(msg) }
-        fun showToggle() { instanceRef?.get()?.showToggleButton() }
+        fun showToggle() { instanceRef?.get()?.ensureToggleVisible() }
     }
 
     private lateinit var windowManager: WindowManager
@@ -45,9 +45,10 @@ class HanyuFloatingService : Service() {
     private lateinit var toggleButton: View
     private val handler = Handler(Looper.getMainLooper())
     private var scanRunnable: Runnable? = null
-    private var hideToggleRunnable: Runnable? = null
     private var diagBanner: View? = null
     private var activateRetry = 0
+    private var lastDiagMsg = ""
+    private var lastOverlayCount = 0
     private val CHANNEL_ID = "hanyu_overlay"
     private val inflightApi = HashSet<String>()
 
@@ -104,19 +105,13 @@ class HanyuFloatingService : Service() {
     private fun startPeriodicScan() {
         stopPeriodicScan()
         scanRunnable = object : Runnable { override fun run() {
-            if (isActive) { HanyuAccessibilityService.instance?.scanAndTranslate(); handler.postDelayed(this, 800) } } }
-        handler.postDelayed(scanRunnable!!, 800)
+            if (isActive) { HanyuAccessibilityService.instance?.scanAndTranslate(); handler.postDelayed(this, 1500) } } }
+        handler.postDelayed(scanRunnable!!, 1500)
     }
     private fun stopPeriodicScan() { scanRunnable?.let { handler.removeCallbacks(it) }; scanRunnable = null }
 
-    private fun showToggleButton() {
-        if (::toggleButton.isInitialized) { toggleButton.visibility = View.VISIBLE; resetHideTimer() }
-    }
-    private fun resetHideTimer() {
-        hideToggleRunnable?.let { handler.removeCallbacks(it) }
-        hideToggleRunnable = Runnable {
-            if (!isActive && ::toggleButton.isInitialized) toggleButton.visibility = View.GONE }
-        handler.postDelayed(hideToggleRunnable!!, 30_000L)
+    private fun ensureToggleVisible() {
+        if (::toggleButton.isInitialized) toggleButton.visibility = View.VISIBLE
     }
 
     // ===== 诊断横幅 =====
@@ -148,7 +143,7 @@ class HanyuFloatingService : Service() {
                 activateRetry++
                 val killInfo = if (lastKill > 0 && lastKill > lastConn) " | 最后被杀:${java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date(lastKill))}" else ""
                 showDiagBanner("无障碍未连接 历史:${connCount}次${killInfo}\n系统注册:${sysReg.take(60)}")
-                isActive = true; updateToggle(true); resetHideTimer()
+                isActive = true; updateToggle(true)
                 if (activateRetry < 10) handler.postDelayed({ tryReactivate() }, 1000)
                 else { activateRetry = 0; showDiagBanner("10次重试失败，请关闭无障碍开关后重新打开") }
                 startPeriodicScan(); return
@@ -158,7 +153,7 @@ class HanyuFloatingService : Service() {
             currentSourceLang = accSvc.let { svc ->
                 val root = svc.rootInActiveWindow
                 if (root != null) { val sb = StringBuilder(); collectText(root, sb); root.recycle(); TranslationEngine.detectAppLanguage(sb.toString()) } else "en" }
-            isActive = true; updateToggle(true); resetHideTimer()
+            isActive = true; updateToggle(true)
             accSvc.scanAndTranslate()
             handler.postDelayed({ accSvc.scanAndTranslate() }, 300)
             handler.postDelayed({ accSvc.scanAndTranslate() }, 800)
@@ -195,6 +190,22 @@ class HanyuFloatingService : Service() {
     }
 
     // ===== 覆盖层 =====
+    private val GRID = 12 // 位置吸附网格，减少跳动
+
+    private fun snapKey(rect: Rect): String {
+        val left = (rect.left / GRID) * GRID
+        val top = (rect.top / GRID) * GRID
+        val w = ((rect.width() + GRID - 1) / GRID) * GRID
+        val h = ((rect.height() + GRID - 1) / GRID) * GRID
+        return "$left,$top,$w,$h"
+    }
+
+    private fun shouldUpdatePos(key: String, rect: Rect): Boolean {
+        val v = activeOverlays[key] ?: return true
+        val lp = v.layoutParams as? WindowManager.LayoutParams ?: return true
+        return Math.abs(lp.x - (rect.left - dp(2))) > 6 || Math.abs(lp.y - (rect.top - dp(2))) > 6
+    }
+
     private fun applyOverlays(nodes: List<AccessibilityNodeInfo>, texts: List<Pair<Rect, String>>) {
         if (!isActive || texts.isEmpty()) return
         val newKeys = HashSet<String>(); val apiQueue = mutableListOf<Triple<Rect, String, String>>()
@@ -203,19 +214,27 @@ class HanyuFloatingService : Service() {
         for (i in texts.indices) {
             val (rect, originalText) = texts[i]
             if (originalText.length > 500) continue
-            val translated = TranslationEngine.translateToChinese(originalText, currentSourceLang)
-            val key = "${rect.left},${rect.top},${rect.width()},${rect.height()}"
+            val translated = TranslationEngine.translateToChinese(originalText)
+            val key = snapKey(rect)
             if (translated != null) { localHit++
-                if (activeOverlays.containsKey(key)) { updateOverlayPosition(key, rect); (activeOverlays[key] as? TextView)?.let { if (it.text != translated) it.text = translated } }
-                else addOverlayView(rect, translated, key)
+                if (activeOverlays.containsKey(key)) {
+                    (activeOverlays[key] as? TextView)?.let { if (it.text != translated) it.text = translated }
+                    if (shouldUpdatePos(key, rect)) updateOverlayPosition(key, rect)
+                } else addOverlayView(rect, translated, key)
                 newKeys.add(key) }
             else if (originalText.any { it.isLetter() } && originalText !in inflightApi) { inflightApi.add(originalText); apiQueue.add(Triple(rect, originalText, key)); apiQ++ }
         }
         nodeList.forEach { it.recycle() }
+        // 移除不再出现的覆盖层
         activeOverlays.keys.filter { it !in newKeys }.forEach { try { windowManager.removeView(activeOverlays[it]) } catch (_: Exception) {}; activeOverlays.remove(it) }
         for ((rect, text, key) in apiQueue.take(10)) ApiTranslator.translate(text, currentSourceLang, "zh", object : ApiTranslator.Callback {
             override fun onResult(t: String?) { inflightApi.remove(text); if (t != null && isActive) handler.post { if (isActive && !activeOverlays.containsKey(key)) addOverlayView(rect, t, key) } } })
-        if (localHit > 0) showDiagBanner("翻译${localHit}处 | 覆盖层${activeOverlays.size} | API排队${apiQ}")
+        // 只在覆盖层数量变化时输出诊断
+        if (activeOverlays.size != lastOverlayCount) {
+            lastOverlayCount = activeOverlays.size
+            val msg = "翻译${localHit}处 | 覆盖层${activeOverlays.size}"
+            if (msg != lastDiagMsg) { lastDiagMsg = msg; showDiagBanner(msg) }
+        }
         android.util.Log.i("Hanyu", "扫描${texts.size}处 词库${localHit} API${apiQ} 总覆盖${activeOverlays.size}")
     }
 
@@ -238,7 +257,7 @@ class HanyuFloatingService : Service() {
             gravity = Gravity.TOP or Gravity.START; x = nr.left - dp(2); y = nr.top - dp(2) }) } catch (_: Exception) {}
     }
 
-    private fun clearAllOverlays() { activeOverlays.values.forEach { try { windowManager.removeView(it) } catch (_: Exception) {} }; activeOverlays.clear(); inflightApi.clear() }
+    private fun clearAllOverlays() { activeOverlays.values.forEach { try { windowManager.removeView(it) } catch (_: Exception) {} }; activeOverlays.clear(); inflightApi.clear(); lastOverlayCount = 0; lastDiagMsg = "" }
     private fun collectText(node: AccessibilityNodeInfo, sb: StringBuilder) { node.text?.let { sb.append(it).append(" ") }; node.contentDescription?.let { sb.append(it).append(" ") }; for (i in 0 until node.childCount) node.getChild(i)?.let { collectText(it, sb); it.recycle() } }
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
 
