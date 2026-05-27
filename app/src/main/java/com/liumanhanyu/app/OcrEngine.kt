@@ -7,14 +7,12 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 
 /**
- * OCR 引擎：识别屏幕截图中的非中文文本块
- * ChineseTextRecognizerOptions 同时支持拉丁字母和中文
+ * OCR 引擎：截图识别非中文文本块
+ * 覆盖海报文字、图片内文字、视频字幕等节点文本采集不到的内容
  */
 object OcrEngine {
 
-    private val recognizer = TextRecognition.getClient(
-        ChineseTextRecognizerOptions.Builder().build()
-    )
+    private val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
 
     fun extractForeignText(bitmap: Bitmap, onResult: (List<Pair<Rect, String>>) -> Unit) {
         val image = InputImage.fromBitmap(bitmap, 0)
@@ -24,19 +22,20 @@ object OcrEngine {
                 for (block in visionText.textBlocks) {
                     for (line in block.lines) {
                         val text = line.text.trim()
-                        if (text.isNotEmpty() && text.any { it.isLetter() && it !in '一'..'鿿' }) {
+                        if (text.isEmpty()) continue
+                        // 至少包含一个非中文的字母字符
+                        val hasForeignLetter = text.any {
+                            it.isLetter() && it !in '一'..'鿿' && it !in '぀'..'ヿ' && it !in '가'..'힯'
+                        }
+                        if (hasForeignLetter) {
                             line.boundingBox?.let { results.add(Rect(it) to text) }
                         }
                     }
                 }
                 onResult(results)
             }
-            .addOnFailureListener {
-                onResult(emptyList())
-            }
+            .addOnFailureListener { onResult(emptyList()) }
     }
 
-    fun close() {
-        recognizer.close()
-    }
+    fun close() { recognizer.close() }
 }

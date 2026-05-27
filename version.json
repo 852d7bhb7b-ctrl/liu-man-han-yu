@@ -1,6 +1,6 @@
 {
-  "version": "1.0.4",
-  "versionCode": 4,
-  "downloadUrl": "https://github.com/852d7bhb7b-ctrl/liu-man-han-yu/releases/download/v1.0.4/liumanhanyu.apk",
-  "changelog": "更新修复：\n- 更新检查改用 raw.githubusercontent.com 直连（国内可用，彻底解决检查更新失败）\n- 悬浮窗按钮常驻不自动隐藏\n- 覆盖层位置吸附+防抖，消除跳动乱码\n- 逐文本独立语言检测\n- 本地词库->云端API自动兜底\n- Gemini Key可选配置\n- 文本采集过滤纯中日韩文字"
+  "version": "1.0.5",
+  "versionCode": 5,
+  "downloadUrl": "https://github.com/852d7bhb7b-ctrl/liu-man-han-yu/releases/download/v1.0.5/liumanhanyu.apk",
+  "changelog": "v1.0.5 更新：\n- 悬浮窗服务被杀后自动恢复，不再消失\n- 翻译框自适应原文大小\n- 覆盖层放在原文下方，不再遮挡\n- 长难句分段翻译（每300字一段）\n- OCR增强：海报/图片/视频字幕全覆盖\n- 文本采集上限提升至2000字符"
 }

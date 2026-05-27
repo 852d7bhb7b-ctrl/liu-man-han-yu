@@ -32,6 +32,7 @@ class HanyuFloatingService : Service() {
         var isServiceRunning = false; private set
         var currentSourceLang = "en"; private set
         private var instanceRef: WeakReference<HanyuFloatingService>? = null
+
         fun updateTranslations(nodes: List<AccessibilityNodeInfo>, texts: List<Pair<Rect, String>>) {
             val svc = instanceRef?.get() ?: return
             svc.handler.post { svc.applyOverlays(nodes, texts) }
@@ -39,6 +40,9 @@ class HanyuFloatingService : Service() {
         fun showDiag(msg: String) { instanceRef?.get()?.showDiagBanner(msg) }
         fun showToggle() { instanceRef?.get()?.ensureToggleVisible() }
     }
+
+    private val PREFS = "hanyu_floating"
+    private val KEY_WAS_ACTIVE = "was_active"
 
     private lateinit var windowManager: WindowManager
     private val activeOverlays = LinkedHashMap<String, View>()
@@ -65,8 +69,20 @@ class HanyuFloatingService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
             startForeground(1001, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(1001, n)
-        if (!isServiceRunning) { isServiceRunning = true; createToggleButton() }
+        if (!isServiceRunning) {
+            isServiceRunning = true
+            createToggleButton()
+            // 恢复上次激活状态
+            val wasActive = getSharedPreferences(PREFS, 0).getBoolean(KEY_WAS_ACTIVE, false)
+            if (wasActive) {
+                handler.postDelayed({ activateOverlay() }, 500)
+            }
+        }
         return START_STICKY
+    }
+
+    private fun saveActiveState(active: Boolean) {
+        getSharedPreferences(PREFS, 0).edit().putBoolean(KEY_WAS_ACTIVE, active).apply()
     }
 
     private fun createToggleButton() {
@@ -118,7 +134,11 @@ class HanyuFloatingService : Service() {
     fun showDiagBanner(msg: String) {
         handler.post {
             try { diagBanner?.let { windowManager.removeView(it) } } catch (_: Exception) {}
-            val b = TextView(this).apply { text = msg; setTextColor(Color.BLACK); setBackgroundColor(0xDDFFFF00.toInt()); textSize = 10f; setPadding(dp(8), dp(4), dp(8), dp(4)); maxLines = 5 }
+            val b = TextView(this).apply {
+                text = msg; setTextColor(Color.BLACK)
+                setBackgroundColor(0xDDFFFF00.toInt()); textSize = 10f
+                setPadding(dp(8), dp(4), dp(8), dp(4)); maxLines = 5
+            }
             windowManager.addView(b, WindowManager.LayoutParams().apply {
                 type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
                 flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
@@ -133,34 +153,27 @@ class HanyuFloatingService : Service() {
     private fun activateOverlay() {
         try {
             val accSvc = HanyuAccessibilityService.instance
-            val sp = getSharedPreferences(HanyuAccessibilityService.PREFS_NAME, 0)
-            val connCount = sp.getInt(HanyuAccessibilityService.KEY_CONNECT_COUNT, 0)
-            val lastConn = sp.getLong(HanyuAccessibilityService.KEY_CONNECTED_AT, 0)
-            val lastKill = sp.getLong(HanyuAccessibilityService.KEY_DESTROYED_AT, 0)
-            val sysReg = try { android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "空" } catch (_: Exception) { "读取失败" }
-
             if (accSvc == null) {
                 activateRetry++
-                val killInfo = if (lastKill > 0 && lastKill > lastConn) " | 最后被杀:${java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date(lastKill))}" else ""
-                showDiagBanner("无障碍未连接 历史:${connCount}次${killInfo}\n系统注册:${sysReg.take(60)}")
-                isActive = true; updateToggle(true)
+                showDiagBanner("无障碍未连接，正在重试($activateRetry/10)...")
+                isActive = true; updateToggle(true); saveActiveState(true)
                 if (activateRetry < 10) handler.postDelayed({ tryReactivate() }, 1000)
                 else { activateRetry = 0; showDiagBanner("10次重试失败，请关闭无障碍开关后重新打开") }
                 startPeriodicScan(); return
             }
             activateRetry = 0
-            showDiagBanner("无障碍已连接✅ 开始翻译...")
+            showDiagBanner("无障碍已连接 开始翻译...")
             currentSourceLang = accSvc.let { svc ->
                 val root = svc.rootInActiveWindow
                 if (root != null) { val sb = StringBuilder(); collectText(root, sb); root.recycle(); TranslationEngine.detectAppLanguage(sb.toString()) } else "en" }
-            isActive = true; updateToggle(true)
+            isActive = true; updateToggle(true); saveActiveState(true)
             accSvc.scanAndTranslate()
             handler.postDelayed({ accSvc.scanAndTranslate() }, 300)
             handler.postDelayed({ accSvc.scanAndTranslate() }, 800)
             startPeriodicScan()
         } catch (e: Exception) {
-            android.util.Log.e("HanyuSvc", "activateOverlay崩溃", e)
-            isActive = true; updateToggle(true)
+            android.util.Log.e("HanyuSvc", "activateOverlay", e)
+            isActive = true; updateToggle(true); saveActiveState(true)
             showDiagBanner("激活出错: ${e.message?.take(50)}")
         }
     }
@@ -168,7 +181,7 @@ class HanyuFloatingService : Service() {
     private fun tryReactivate() {
         val accSvc = HanyuAccessibilityService.instance
         if (accSvc != null) {
-            activateRetry = 0; showDiagBanner("无障碍重连成功✅")
+            activateRetry = 0; showDiagBanner("无障碍重连成功")
             currentSourceLang = accSvc.let { svc ->
                 val root = svc.rootInActiveWindow
                 if (root != null) { val sb = StringBuilder(); collectText(root, sb); root.recycle(); TranslationEngine.detectAppLanguage(sb.toString()) } else "en" }
@@ -177,7 +190,7 @@ class HanyuFloatingService : Service() {
     }
 
     private fun deactivateOverlay() {
-        isActive = false; updateToggle(false); clearAllOverlays(); stopPeriodicScan()
+        isActive = false; updateToggle(false); clearAllOverlays(); stopPeriodicScan(); saveActiveState(false)
         try { diagBanner?.let { windowManager.removeView(it) } } catch (_: Exception) {}; diagBanner = null
     }
 
@@ -190,20 +203,25 @@ class HanyuFloatingService : Service() {
     }
 
     // ===== 覆盖层 =====
-    private val GRID = 12 // 位置吸附网格，减少跳动
+    private val GRID = 10
 
     private fun snapKey(rect: Rect): String {
         val left = (rect.left / GRID) * GRID
         val top = (rect.top / GRID) * GRID
         val w = ((rect.width() + GRID - 1) / GRID) * GRID
-        val h = ((rect.height() + GRID - 1) / GRID) * GRID
-        return "$left,$top,$w,$h"
+        return "$left,$top,$w"
     }
 
     private fun shouldUpdatePos(key: String, rect: Rect): Boolean {
         val v = activeOverlays[key] ?: return true
         val lp = v.layoutParams as? WindowManager.LayoutParams ?: return true
-        return Math.abs(lp.x - (rect.left - dp(2))) > 6 || Math.abs(lp.y - (rect.top - dp(2))) > 6
+        return Math.abs(lp.x - rect.left) > 8 || Math.abs(lp.y - (rect.bottom + dp(2))) > 8
+    }
+
+    // 根据原文高度推算字号
+    private fun estFontSize(rect: Rect): Float {
+        // 文本高度约等于字号，取 0.7 倍防止过大
+        return (rect.height() * 0.7f).coerceIn(9f, 20f) / resources.displayMetrics.scaledDensity
     }
 
     private fun applyOverlays(nodes: List<AccessibilityNodeInfo>, texts: List<Pair<Rect, String>>) {
@@ -213,62 +231,139 @@ class HanyuFloatingService : Service() {
 
         for (i in texts.indices) {
             val (rect, originalText) = texts[i]
-            if (originalText.length > 500) continue
-            val translated = TranslationEngine.translateToChinese(originalText)
+            val len = originalText.length
             val key = snapKey(rect)
-            if (translated != null) { localHit++
+
+            // 先尝试本地词库
+            val translated = TranslationEngine.translateToChinese(originalText)
+            if (translated != null) {
+                localHit++
                 if (activeOverlays.containsKey(key)) {
                     (activeOverlays[key] as? TextView)?.let { if (it.text != translated) it.text = translated }
                     if (shouldUpdatePos(key, rect)) updateOverlayPosition(key, rect)
                 } else addOverlayView(rect, translated, key)
-                newKeys.add(key) }
-            else if (originalText.any { it.isLetter() } && originalText !in inflightApi) { inflightApi.add(originalText); apiQueue.add(Triple(rect, originalText, key)); apiQ++ }
+                newKeys.add(key)
+            } else if (originalText.any { it.isLetter() } && originalText !in inflightApi) {
+                inflightApi.add(originalText)
+                if (len > 300) {
+                    // 长文本分段翻译
+                    val chunks = originalText.chunked(300)
+                    for ((ci, chunk) in chunks.withIndex()) {
+                        val cRect = if (ci == 0) rect else Rect(rect.left, rect.top + ci * 30, rect.right, rect.bottom + ci * 30)
+                        val cKey = snapKey(cRect)
+                        apiQueue.add(Triple(cRect, chunk, cKey))
+                    }
+                    apiQ += chunks.size
+                } else {
+                    apiQueue.add(Triple(rect, originalText, key)); apiQ++
+                }
+            }
         }
         nodeList.forEach { it.recycle() }
+
         // 移除不再出现的覆盖层
-        activeOverlays.keys.filter { it !in newKeys }.forEach { try { windowManager.removeView(activeOverlays[it]) } catch (_: Exception) {}; activeOverlays.remove(it) }
-        for ((rect, text, key) in apiQueue.take(10)) ApiTranslator.translate(text, currentSourceLang, "zh", object : ApiTranslator.Callback {
-            override fun onResult(t: String?) { inflightApi.remove(text); if (t != null && isActive) handler.post { if (isActive && !activeOverlays.containsKey(key)) addOverlayView(rect, t, key) } } })
-        // 只在覆盖层数量变化时输出诊断
+        activeOverlays.keys.filter { it !in newKeys }.forEach {
+            try { windowManager.removeView(activeOverlays[it]) } catch (_: Exception) {}
+            activeOverlays.remove(it)
+        }
+
+        // API 翻译
+        for ((rect, text, key) in apiQueue.take(15)) {
+            ApiTranslator.translate(text, currentSourceLang, "zh", object : ApiTranslator.Callback {
+                override fun onResult(t: String?) {
+                    inflightApi.remove(text)
+                    if (t != null && isActive) handler.post {
+                        if (isActive && !activeOverlays.containsKey(key)) addOverlayView(rect, t, key)
+                    }
+                }
+            })
+        }
+
+        // 静默日志
         if (activeOverlays.size != lastOverlayCount) {
             lastOverlayCount = activeOverlays.size
-            val msg = "翻译${localHit}处 | 覆盖层${activeOverlays.size}"
+            val msg = "翻译${localHit}+${apiQ}处 | 覆盖${activeOverlays.size}"
             if (msg != lastDiagMsg) { lastDiagMsg = msg; showDiagBanner(msg) }
         }
-        android.util.Log.i("Hanyu", "扫描${texts.size}处 词库${localHit} API${apiQ} 总覆盖${activeOverlays.size}")
+        android.util.Log.i("Hanyu", "文本${texts.size} 词库${localHit} API${apiQ} 覆盖${activeOverlays.size}")
     }
 
     private fun addOverlayView(rect: Rect, text: String, key: String) {
-        val ov = TextView(this).apply { this.text = text; setTextColor(Color.BLACK); textSize = 14f; setTypeface(null, android.graphics.Typeface.BOLD); setBackgroundColor(Color.WHITE); setPadding(dp(4), dp(2), dp(4), dp(2)); maxLines = 5 }
+        val fontSize = estFontSize(rect)
+        val ov = TextView(this).apply {
+            this.text = text
+            setTextColor(Color.BLACK)
+            textSize = fontSize
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setBackgroundColor(0xF0FFFFFF.toInt())
+            setPadding(dp(3), dp(1), dp(3), dp(1))
+            maxLines = 8
+        }
+        // 放在原文下方
+        val targetY = rect.bottom + dp(2)
         val p = WindowManager.LayoutParams().apply {
             type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
             flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-            format = PixelFormat.TRANSLUCENT; width = (rect.width() + dp(4)).coerceAtLeast(dp(40)); height = WindowManager.LayoutParams.WRAP_CONTENT
-            gravity = Gravity.TOP or Gravity.START; x = rect.left - dp(2); y = rect.top - dp(2) }
-        windowManager.addView(ov, p); activeOverlays[key] = ov
+            format = PixelFormat.TRANSLUCENT
+            width = (rect.width() + dp(4)).coerceAtLeast(dp(40))
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            gravity = Gravity.TOP or Gravity.START
+            x = rect.left; y = targetY
+        }
+        windowManager.addView(ov, p)
+        activeOverlays[key] = ov
     }
 
     private fun updateOverlayPosition(key: String, nr: Rect) {
         val v = activeOverlays[key] ?: return
-        try { windowManager.updateViewLayout(v, WindowManager.LayoutParams().apply {
-            type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
-            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-            format = PixelFormat.TRANSLUCENT; width = (nr.width() + dp(4)).coerceAtLeast(dp(40)); height = WindowManager.LayoutParams.WRAP_CONTENT
-            gravity = Gravity.TOP or Gravity.START; x = nr.left - dp(2); y = nr.top - dp(2) }) } catch (_: Exception) {}
+        try {
+            windowManager.updateViewLayout(v, WindowManager.LayoutParams().apply {
+                type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+                flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                format = PixelFormat.TRANSLUCENT
+                width = (nr.width() + dp(4)).coerceAtLeast(dp(40))
+                height = WindowManager.LayoutParams.WRAP_CONTENT
+                gravity = Gravity.TOP or Gravity.START
+                x = nr.left; y = nr.bottom + dp(2)
+            })
+        } catch (_: Exception) {}
     }
 
-    private fun clearAllOverlays() { activeOverlays.values.forEach { try { windowManager.removeView(it) } catch (_: Exception) {} }; activeOverlays.clear(); inflightApi.clear(); lastOverlayCount = 0; lastDiagMsg = "" }
-    private fun collectText(node: AccessibilityNodeInfo, sb: StringBuilder) { node.text?.let { sb.append(it).append(" ") }; node.contentDescription?.let { sb.append(it).append(" ") }; for (i in 0 until node.childCount) node.getChild(i)?.let { collectText(it, sb); it.recycle() } }
+    private fun clearAllOverlays() {
+        activeOverlays.values.forEach { try { windowManager.removeView(it) } catch (_: Exception) {} }
+        activeOverlays.clear(); inflightApi.clear(); lastOverlayCount = 0; lastDiagMsg = ""
+    }
+
+    private fun collectText(node: AccessibilityNodeInfo, sb: StringBuilder) {
+        node.text?.let { sb.append(it).append(" ") }
+        node.contentDescription?.let { sb.append(it).append(" ") }
+        for (i in 0 until node.childCount) node.getChild(i)?.let { collectText(it, sb); it.recycle() }
+    }
+
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, "汉化服务", NotificationManager.IMPORTANCE_LOW).apply { description = "流氓汉语后台运行中"; setShowBadge(false) })
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(NotificationChannel(CHANNEL_ID, "汉化服务", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "流氓汉语后台运行中"; setShowBadge(false) })
     }
+
     private fun buildNotification(): Notification {
-        val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        return NotificationCompat.Builder(this, CHANNEL_ID).setContentTitle("流氓汉语").setContentText("汉化服务运行中").setSmallIcon(android.R.drawable.ic_menu_edit).setContentIntent(pi).setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW).build()
+        val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("流氓汉语")
+            .setContentText("汉化服务运行中")
+            .setSmallIcon(android.R.drawable.ic_menu_edit)
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
     }
+
     override fun onBind(intent: Intent?): IBinder? = null
+
     override fun onDestroy() {
         stopPeriodicScan(); clearAllOverlays()
         try { diagBanner?.let { windowManager.removeView(it) } } catch (_: Exception) {}
