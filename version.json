@@ -1,6 +1,6 @@
 {
-  "version": "1.0.6",
-  "versionCode": 6,
-  "downloadUrl": "https://github.com/852d7bhb7b-ctrl/liu-man-han-yu/releases/download/v1.0.6/liumanhanyu.apk",
-  "changelog": "v1.0.6：\n- 下载改用直连HTTP（不再依赖DownloadManager），解决国产ROM下载失败\n- 悬浮窗服务被杀后自动恢复\n- 翻译框自适应原文大小\n- 覆盖层放在原文下方\n- 长难句分段翻译\n- OCR增强覆盖海报/图片/字幕"
+  "version": "1.0.7",
+  "versionCode": 7,
+  "downloadUrl": "https://github.com/852d7bhb7b-ctrl/liu-man-han-yu/releases/download/v1.0.7/liumanhanyu.apk",
+  "changelog": "v1.0.7：\n- 下载自动尝试多镜像（主站→ghproxy→fastgit）\n- 下载失败弹窗一键「浏览器下载」兜底\n- 无障碍断开时检测系统设置状态，给出准确提示"
 }

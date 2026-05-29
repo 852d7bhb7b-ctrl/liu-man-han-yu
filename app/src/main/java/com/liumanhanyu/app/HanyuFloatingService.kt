@@ -150,15 +150,31 @@ class HanyuFloatingService : Service() {
     }
 
     // ===== 激活/停用 =====
+    private fun isAccessibilityEnabledInSystem(): Boolean {
+        val serviceName = "$packageName/$packageName.HanyuAccessibilityService"
+        val enabled = android.provider.Settings.Secure.getString(
+            contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+        return enabled.contains(serviceName) || enabled.contains("$packageName/.HanyuAccessibilityService")
+    }
+
     private fun activateOverlay() {
         try {
             val accSvc = HanyuAccessibilityService.instance
             if (accSvc == null) {
+                // 检查系统设置中是否已开启
+                if (isAccessibilityEnabledInSystem()) {
+                    // 开启了但没连上 → 服务被系统杀了，需要重新开关
+                    showDiagBanner("无障碍已在设置中开启但未连接\n请到系统设置中：关闭再重开「流氓汉语」无障碍")
+                    isActive = true; updateToggle(true); saveActiveState(true)
+                    activateRetry = 0
+                    startPeriodicScan()
+                    return
+                }
                 activateRetry++
-                showDiagBanner("无障碍未连接，正在重试($activateRetry/10)...")
+                showDiagBanner("无障碍未开启，正在重试($activateRetry/10)...")
                 isActive = true; updateToggle(true); saveActiveState(true)
-                if (activateRetry < 10) handler.postDelayed({ tryReactivate() }, 1000)
-                else { activateRetry = 0; showDiagBanner("10次重试失败，请关闭无障碍开关后重新打开") }
+                if (activateRetry < 10) handler.postDelayed({ tryReactivate() }, 1500)
+                else { activateRetry = 0; showDiagBanner("10次重试失败，请到系统设置开启无障碍") }
                 startPeriodicScan(); return
             }
             activateRetry = 0
@@ -186,7 +202,7 @@ class HanyuFloatingService : Service() {
                 val root = svc.rootInActiveWindow
                 if (root != null) { val sb = StringBuilder(); collectText(root, sb); root.recycle(); TranslationEngine.detectAppLanguage(sb.toString()) } else "en" }
             accSvc.scanAndTranslate(); startPeriodicScan()
-        } else if (isActive && activateRetry < 10) { activateRetry++; handler.postDelayed({ tryReactivate() }, 1000) }
+        } else if (isActive && activateRetry < 10) { activateRetry++; handler.postDelayed({ tryReactivate() }, 1500) }
     }
 
     private fun deactivateOverlay() {
